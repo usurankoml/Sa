@@ -1,0 +1,403 @@
+import React, { useState, useEffect } from 'react';
+
+// Function to draw text on an image using HTML Canvas
+const drawTextOnImage = (baseImageSrc, textOptions) => {
+    return new Promise((resolve, reject) => {
+        if (!baseImageSrc || !textOptions.content) {
+            resolve(baseImageSrc); // Return original if no text or no base image
+            return;
+        }
+
+        const img = new Image();
+        img.crossOrigin = 'Anonymous'; // Required for loading images from data URLs onto canvas
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+
+            canvas.width = img.width;
+            canvas.height = img.height;
+
+            ctx.drawImage(img, 0, 0);
+
+            // Set text styles
+            ctx.font = `${textOptions.size}px ${textOptions.font}`;
+            ctx.fillStyle = textOptions.color;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle'; // Align text vertically to the middle of the line
+
+            const text = textOptions.content;
+
+            let x = canvas.width / 2;
+            let y;
+            const padding = 20; // Padding from top/bottom for 'top'/'bottom' positions
+
+            switch (textOptions.position) {
+                case 'top':
+                    y = padding + textOptions.size / 2; // Position from top
+                    break;
+                case 'center':
+                    y = canvas.height / 2; // Center vertically
+                    break;
+                case 'bottom':
+                    y = canvas.height - padding - textOptions.size / 2; // Position from bottom
+                    break;
+                default:
+                    y = canvas.height / 2; // Default to center
+            }
+
+            // Add text shadow for better readability
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+            ctx.shadowBlur = 5;
+            ctx.shadowOffsetX = 2;
+            ctx.shadowOffsetY = 2;
+
+            ctx.fillText(text, x, y);
+
+            // Clear shadow for subsequent draws if any
+            ctx.shadowColor = 'transparent';
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+
+            resolve(canvas.toDataURL('image/png'));
+        };
+        img.onerror = (error) => {
+            console.error("Error loading image for text overlay:", error);
+            reject(new Error("Failed to load image for text overlay."));
+        };
+        img.src = baseImageSrc;
+    });
+};
+
+// Main App component
+const App = () => {
+    // State variables for managing user input, generated image, and loading status for GENERATION
+    const [prompt, setPrompt] = useState(''); // User's text description for image generation
+    const [generatedImage, setGeneratedImage] = useState(''); // URL of the generated image (raw from AI)
+    const [displayImageSrc, setDisplayImageSrc] = useState(''); // URL of the image displayed (with text overlay if applicable)
+    const [isGenerating, setIsGenerating] = useState(false); // Loading state for image generation API calls
+    const [selectedType, setSelectedType] = useState('image'); // Type of generation: 'image', 'logo', 'cover'
+    const [aspectRatio, setAspectRatio] = useState('1:1'); // Aspect ratio for image generation
+    const [generationErrorMessage, setGenerationErrorMessage] = useState(''); // To display any error messages for generation
+
+    // State variables for text overlay
+    const [textOverlayContent, setTextOverlayContent] = useState('');
+    const [textOverlayColor, setTextOverlayColor] = useState('#FFFFFF'); // Default white
+    const [textOverlayFont, setTextOverlayFont] = useState('Inter'); // Default Inter
+    const [textOverlaySize, setTextOverlaySize] = useState(48); // Default size
+    const [textOverlayPosition, setTextOverlayPosition] = useState('center'); // Default center
+
+    // State variables for managing image understanding
+    const [uploadedImage, setUploadedImage] = useState(null); // File object for uploaded image
+    const [uploadedImageBase64, setUploadedImageBase64] = useState(''); // Base64 string of uploaded image
+    const [imageDescription, setImageDescription] = useState(''); // AI's description of the uploaded image
+    const [isUnderstanding, setIsUnderstanding] = useState(false); // Loading state for image understanding API calls
+    const [understandingErrorMessage, setUnderstandingErrorMessage] = useState(''); // To display any error messages for understanding
+
+    // Effect to update display image when generatedImage or text options change
+    useEffect(() => {
+        const updateDisplayImage = async () => {
+            if (generatedImage && (selectedType === 'logo' || selectedType === 'cover') && textOverlayContent.trim()) {
+                try {
+                    const newImage = await drawTextOnImage(generatedImage, {
+                        content: textOverlayContent,
+                        color: textOverlayColor,
+                        font: textOverlayFont,
+                        size: textOverlaySize,
+                        position: textOverlayPosition
+                    });
+                    setDisplayImageSrc(newImage);
+                } catch (error) {
+                    console.error("Error drawing text on image:", error);
+                    setGenerationErrorMessage("فشل في إضافة النص إلى الصورة.");
+                    setDisplayImageSrc(generatedImage); // Fallback to raw image
+                }
+            } else {
+                setDisplayImageSrc(generatedImage); // If no text or not logo/cover, just show the raw generated image
+            }
+        };
+        updateDisplayImage();
+    }, [generatedImage, selectedType, textOverlayContent, textOverlayColor, textOverlayFont, textOverlaySize, textOverlayPosition]);
+
+
+    // Function to translate Arabic text to English using Gemini API
+    const translateText = async (text) => {
+        try {
+            const chatHistory = [];
+            chatHistory.push({ role: "user", parts: [{ text: `Translate the following Arabic text to English: "${text}"` }] });
+            const payload = { contents: chatHistory };
+            const apiKey = ""; // API key will be provided by the environment
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(`Translation API error: ${errorData.error.message}`);
+            }
+
+            const result = await response.json();
+            if (result.candidates && result.candidates.length > 0 &&
+                result.candidates[0].content && result.candidates[0].content.parts &&
+                result.candidates[0].content.parts.length > 0) {
+                return result.candidates[0].content.parts[0].text;
+            } else {
+                throw new Error("Translation failed: No content in response.");
+            }
+        } catch (error) {
+            console.error("Error during translation:", error);
+            setGenerationErrorMessage(`فشل الترجمة: ${error.message}`);
+            return text; // Fallback to original text if translation fails
+        }
+    };
+
+    // Function to generate image using Imagen API
+    const generateImage = async () => {
+        setIsGenerating(true);
+        setGeneratedImage('');
+        setDisplayImageSrc(''); // Clear display image as well
+        setGenerationErrorMessage('');
+
+        try {
+            // Translate the prompt if it contains Arabic characters
+            const isArabic = /[\u0600-\u06FF]/.test(prompt);
+            const translatedPrompt = isArabic ? await translateText(prompt) : prompt;
+
+            let finalPrompt = translatedPrompt;
+            let imageSize = '1024x1024'; // Default for 1:1
+
+            // Adjust prompt and dimensions based on selected type and aspect ratio
+            switch (selectedType) {
+                case 'logo':
+                    // Explicitly tell the AI NOT to generate text, as we'll overlay it
+                    finalPrompt = `minimalist, iconic, clean, vector style logo for: ${translatedPrompt}. No text, no typography, no words.`;
+                    imageSize = '512x512'; // Standard small size for logos
+                    break;
+                case 'cover':
+                    // Explicitly tell the AI NOT to generate text for covers either
+                    finalPrompt = `high-quality, artistic, detailed cover art for: ${translatedPrompt}, suitable for a cover. No text, no typography, no words.`;
+                    // Map aspect ratio to supported Imagen 3.0 sizes for covers
+                    if (aspectRatio === '2:3') { // Book cover (portrait)
+                        imageSize = '720x1280'; // Closest supported portrait size for Imagen 3.0
+                    } else if (aspectRatio === '16:9') { // Banner/Video cover (landscape)
+                        imageSize = '1920x1080'; // High-res landscape for Imagen 3.0
+                    } else if (aspectRatio === '9:16') { // Vertical cover
+                        imageSize = '720x1280';
+                    } else { // Default to 16:9 if 1:1 selected for cover, or fallback
+                        imageSize = '1280x720'; // Standard landscape for Imagen 3.0
+                    }
+                    break;
+                default: // 'image' (general image)
+                    // Explicitly tell the AI not to add text for general images as per user's request
+                    finalPrompt = `${translatedPrompt}, no text, no words, no typography, high quality, detailed, realistic.`;
+                    // Map aspect ratio to supported Imagen 3.0 sizes for general images
+                    if (aspectRatio === '16:9') {
+                        imageSize = '1280x720';
+                    } else if (aspectRatio === '9:16') {
+                        imageSize = '720x1280';
+                    } else { // 1:1
+                        imageSize = '1024x1024';
+                    }
+                    break;
+            }
+
+            const payload = {
+                instances: {
+                    prompt: finalPrompt,
+                    imageSize: imageSize // Use the determined imageSize, which is now always a supported value
+                },
+                parameters: { "sampleCount": 1 }
+            };
+            const apiKey = ""; // API key will be provided by the environment
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
+
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(`Image generation API error: ${errorData.error.message}`);
+            }
+
+            const result = await response.json();
+            if (result.predictions && result.predictions.length > 0 && result.predictions[0].bytesBase64Encoded) {
+                const imageUrl = `data:image/png;base64,${result.predictions[0].bytesBase64Encoded}`;
+                setGeneratedImage(imageUrl);
+                // The useEffect will handle setting displayImageSrc based on textOverlayContent
+            } else {
+                throw new Error("Image generation failed: No image data in response.");
+            }
+        } catch (error) {
+            console.error("Error generating image:", error);
+            setGenerationErrorMessage(`فشل توليد الصورة: ${error.message}. يرجى المحاولة مرة أخرى.`);
+        } finally {
+            setIsGenerating(false);
+        }
+    };
+
+    // Function to download the currently displayed image (which might have text overlay)
+    const downloadImage = () => {
+        if (displayImageSrc) {
+            const link = document.createElement('a');
+            link.href = displayImageSrc;
+            link.download = `${selectedType}_${Date.now()}.png`; // Dynamic filename
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+    };
+
+    // Handle image file selection for understanding
+    const handleImageUpload = (event) => {
+        const file = event.target.files[0];
+        if (file) {
+            setUploadedImage(file);
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                // Extract base64 string after "base64,"
+                const base64String = reader.result.split(',')[1];
+                setUploadedImageBase64(base64String);
+            };
+            reader.readAsDataURL(file);
+            setImageDescription(''); // Clear previous description
+            setUnderstandingErrorMessage(''); // Clear previous error
+        } else {
+            setUploadedImage(null);
+            setUploadedImageBase64('');
+        }
+    };
+
+    // Function to understand an uploaded image using Gemini API
+    const understandImage = async () => {
+        if (!uploadedImageBase64) {
+            setUnderstandingErrorMessage("الرجاء تحميل صورة أولاً.");
+            return;
+        }
+
+        setIsUnderstanding(true);
+        setImageDescription('');
+        setUnderstandingErrorMessage('');
+
+        try {
+            const promptForUnderstanding = "Describe this image in detail.";
+            const payload = {
+                contents: [
+                    {
+                        role: "user",
+                        parts: [
+                            { text: promptForUnderstanding },
+                            {
+                                inlineData: {
+                                    mimeType: uploadedImage.type, // Use actual mime type of the uploaded file
+                                    data: uploadedImageBase64
+                                }
+                            }
+                        ]
+                    }
+                ],
+            };
+            const apiKey = ""; // API key will be provided by the environment
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(`Image understanding API error: ${errorData.error.message}`);
+            }
+
+            const result = await response.json();
+            if (result.candidates && result.candidates.length > 0 &&
+                result.candidates[0].content && result.candidates[0].content.parts &&
+                result.candidates[0].content.parts.length > 0) {
+                setImageDescription(result.candidates[0].content.parts[0].text);
+            } else {
+                throw new Error("Image understanding failed: No content in response.");
+            }
+        } catch (error) {
+            console.error("Error understanding image:", error);
+            setUnderstandingErrorMessage(`فشل فهم الصورة: ${error.message}. يرجى المحاولة مرة أخرى.`);
+        } finally {
+            setIsUnderstanding(false);
+        }
+    };
+
+
+    return (
+        <div className="min-h-screen bg-gradient-to-br from-purple-100 to-indigo-200 p-4 font-sans text-gray-800 flex items-center justify-center">
+            <div className="bg-white p-4 sm:p-8 rounded-xl shadow-2xl w-full max-w-4xl transform transition-all duration-300 hover:scale-[1.005]">
+                <h1 className="text-3xl sm:text-4xl font-extrabold text-center text-indigo-700 mb-6 sm:mb-8">
+                    تطبيق توليد وفهم الصور بالذكاء الاصطناعي
+                </h1>
+
+                {/* Image Generation Section */}
+                <div className="mb-8 p-4 sm:p-6 border border-indigo-200 rounded-xl bg-indigo-50 shadow-md">
+                    <h2 className="text-2xl sm:text-3xl font-bold text-indigo-600 mb-4 sm:mb-6 text-center">
+                        توليد الصور
+                    </h2>
+                    <div className="mb-4 sm:mb-6">
+                        <label htmlFor="prompt" className="block text-base sm:text-lg font-semibold text-gray-700 mb-2">
+                            الوصف النصي (عربي أو إنجليزي):
+                        </label>
+                        <textarea
+                            id="prompt"
+                            className="w-full p-2 sm:p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 resize-y min-h-[80px] sm:min-h-[100px]"
+                            placeholder="اكتب وصفًا تفصيليًا للصورة التي تريد توليدها، مثال: 'قطة لطيفة تجلس على نافذة تطل على مدينة في الليل'"
+                            value={prompt}
+                            onChange={(e) => setPrompt(e.target.value)}
+                            rows="4"
+                        ></textarea>
+                    </div>
+
+                    <div className="mb-4 sm:mb-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label htmlFor="type" className="block text-base sm:text-lg font-semibold text-gray-700 mb-2">
+                                نوع التوليد:
+                            </label>
+                            <select
+                                id="type"
+                                className="w-full p-2 sm:p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200"
+                                value={selectedType}
+                                onChange={(e) => setSelectedType(e.target.value)}
+                            >
+                                <option value="image">صورة عامة</option>
+                                <option value="logo">شعار</option>
+                                <option value="cover">غلاف</option>
+                            </select>
+                        </div>
+
+                        {selectedType !== 'logo' && ( // Aspect ratio selection only for image and cover
+                            <div>
+                                <label htmlFor="aspectRatio" className="block text-base sm:text-lg font-semibold text-gray-700 mb-2">
+                                    نسبة الأبعاد:
+                                </label>
+                                <select
+                                    id="aspectRatio"
+                                    className="w-full p-2 sm:p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200"
+                                    value={aspectRatio}
+                                    onChange={(e) => setAspectRatio(e.target.value)}
+                                >
+                                    <option value="1:1">مربع (1:1)</option>
+                                    <option value="16:9">أفقي عريض (16:9)</option>
+                                    <option value="9:16">عمودي (9:16)</option>
+                                    {selectedType === 'cover' && (
+                                        <option value="2:3">غلاف كتاب (2:3)</option>
+                                    )}
+                                </select>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Text Overlay Options - Only for Logo and Cover */}
+                    {(selectedType === 'lo
